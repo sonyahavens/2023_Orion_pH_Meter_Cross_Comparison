@@ -1,0 +1,1316 @@
+---
+title:
+author:
+date:
+output: 
+    pdf_document:
+      latex_engine: xelatex
+      keep_tex: true
+      fig_caption: yes
+      includes:
+        in_header: "preamble.tex"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r load_packages, include = FALSE}
+library(tidyverse)
+library(janitor)
+library(here)
+library(ggridges)
+library(viridis)
+library(viridisLite)
+library(patchwork)
+library(ggrepel)
+library(lubridate)
+library(latexpdf)
+library(tinytex)
+library(ggpubr)
+library(cowplot)
+library(emmeans)
+library(broom)
+options(scipen=999)
+```
+
+```{r source_themes, include = FALSE}
+source(here("functions", "theme_SH_pubs.R"))
+```
+
+```{r load_data, include=FALSE}
+
+orion_qc_data <- read_csv(here("data", "pH_QAQC_log_orion.csv")) %>% 
+  clean_names() %>% 
+  mutate(analysis_date = dmy(analysis_date))
+
+fisher_qc_data <- read_csv(here("data", "pH_QAQC_log_fisher.csv")) %>% 
+  clean_names() %>% 
+  mutate(analysis_date = dmy(analysis_date))
+
+comparison_data <- read_csv(here("data", "pH_intercomparisons_2023.csv")) %>% 
+  clean_names() %>% 
+  mutate(rpd = abs((orion - accumet)/((orion + accumet)/2))*100)
+
+orion_qc <- orion_qc_data %>% 
+  select("analysis_date", "mv_8", "mv_6", "mv_4", "slope_calc", "dro", "mq", "ref", "lod") %>% 
+  rename(mv_8_orion = mv_8, 
+         mv_6_orion = mv_6,
+         mv_4_orion = mv_4, 
+         slope_calc_orion = slope_calc, 
+         dro_orion = dro, 
+         mq_orion = mq, 
+         ref_orion = ref, 
+         lod_orion = lod) %>% 
+  mutate(mv_4_diff = abs(mv_4_orion - 177), 
+         mv_6_diff = abs(mv_6_orion - 59), 
+         mv_8_diff = abs(mv_8_orion - -59))
+
+fisher_qc <- fisher_qc_data %>% 
+  select("analysis_date", "mv_8", "mv_6", "mv_4", "slope_calc", "dro", "mq", "ref", "lod") %>% 
+  rename(mv_8_fisher = mv_8, 
+         mv_6_fisher = mv_6,
+         mv_4_fisher = mv_4, 
+         slope_calc_fisher = slope_calc, 
+         dro_fisher = dro, 
+         mq_fisher = mq, 
+         ref_fisher = ref, 
+         lod_fisher = lod) %>% 
+    mutate(mv_4_diff = abs(mv_4_fisher - 177), 
+         mv_6_diff = abs(mv_6_fisher - 59), 
+         mv_8_diff = abs(mv_8_fisher - -59))
+
+combined_qc <- orion_qc %>% 
+  left_join(fisher_qc, by = "analysis_date") %>% 
+  filter(analysis_date < "2023-10-01") %>% 
+  mutate(rpd = abs(((ref_orion - ref_fisher)/((ref_orion + ref_fisher)/2))*100))
+
+fisher_dup_data <- read_csv(here("data", "20230301to20240321_pH_spikeresults.csv")) %>% 
+  clean_names() %>% 
+  filter(instrument == "Fisher Scientific Accumet pH meter") %>% 
+  filter(qc_type == "Instrument Duplicate")
+
+orion_dup_data <- read_csv(here("data", "pH_intercomparisons_2023_instrumentdups.csv")) %>% 
+  clean_names() %>% 
+  mutate(orion_rpd = abs(((orion - orion_dup)/((orion + orion_dup)/2))*100),
+         fisher_rpd = abs(((accumet - accumet_dup)/((accumet + accumet_dup)/2))*100))
+
+pt_data <- read_csv(here("data", "2023_pH_ptresults.csv")) %>% 
+  mutate(eccc_orion_diff = abs(ph_eccc - ph_orion),
+         eccc_fisher_diff = abs(ph_eccc - ph_fisher), 
+         orion_fisher_diff = abs(ph_fisher - ph_orion)) %>% 
+  mutate(eccc_orion_rpd = abs(((ph_eccc - ph_orion)/((ph_eccc + ph_orion)/2))*100), 
+         eccc_fisher_rpd = abs(((ph_eccc - ph_fisher)/((ph_eccc + ph_fisher)/2))*100), 
+         orion_fisher_rpd = abs(((ph_fisher - ph_orion)/((ph_fisher + ph_orion)/2)*100)))
+
+```
+
+```{r QAQC_lod_fisher, include=FALSE}
+
+orion_lod_mean <- orion_qc_data %>% 
+  summarise(mean=mean(lod, na.rm=TRUE)) %>% 
+  round(digits = 2)
+
+orion_lod_sd <- orion_qc_data %>% 
+  summarise(stdev=sd(lod, na.rm=TRUE)) %>% 
+  round(digits = 2)
+
+orion_lod_min <- orion_qc_data %>% 
+  summarise(min=min(lod, na.rm = TRUE)) %>% 
+    round(digits = 2)
+
+orion_lod_max <- orion_qc_data %>% 
+  summarise(max=max(lod, na.rm = TRUE)) %>% 
+  round(digits = 2)
+
+orion_lod_n <- length(orion_qc_data$lod)
+
+fisher_lod_mean <- fisher_qc_data %>% 
+  summarise(mean=mean(lod, na.rm=TRUE)) %>% 
+  round(digits = 2)
+
+fisher_lod_sd <- fisher_qc_data %>% 
+  summarise(stdev=sd(lod, na.rm=TRUE)) %>% 
+  round(digits = 2)
+
+fisher_lod_min <- fisher_qc_data %>% 
+  summarise(min=min(lod, na.rm = TRUE))
+
+fisher_lod_max <- fisher_qc_data %>% 
+  summarise(max=max(lod, na.rm = TRUE)) %>% 
+  round(digits = 2)
+
+fisher_lod_n <- length(fisher_qc_data$lod)
+
+```
+
+```{r dups, include=FALSE, warning=FALSE, message=FALSE}
+
+orion_dup_rpd_mean <- orion_dup_data %>% 
+  summarise(mean=mean(orion_rpd, na.rm = TRUE)) %>% 
+  round(digits = 1)
+
+orion_dup_rpd_sd <- orion_dup_data %>% 
+  summarise(stdev=sd(orion_rpd, na.rm = TRUE)) %>% 
+  round(digits = 1)
+
+orion_dup_rpd_min <- orion_dup_data %>% 
+  summarise(min=min(orion_rpd, na.rm = TRUE)) %>% 
+  round(digits = 1)
+
+orion_dup_rpd_max <- orion_dup_data %>% 
+  summarise(max=max(orion_rpd, na.rm = TRUE)) %>% 
+  round(digits = 1)
+
+orion_dup_rpd_median <- orion_dup_data %>% 
+  summarise(median=median(orion_rpd, na.rm = TRUE)) %>% 
+  round(digits = 1)
+
+orion_dup_rpd_n <- length(orion_dup_data$orion_rpd)
+
+
+fisher_dup_rpd_mean <- fisher_dup_data %>% 
+  summarise(mean=mean(percent_rpd, na.rm = TRUE)) %>% 
+  round(digits = 1)
+
+fisher_dup_rpd_sd <- fisher_dup_data %>% 
+  summarise(stdev=sd(percent_rpd, na.rm = TRUE)) %>% 
+  round(digits = 1)
+
+fisher_dup_rpd_min <- fisher_dup_data %>% 
+  summarise(min=min(percent_rpd, na.rm = TRUE)) %>% 
+  round(digits = 1)
+
+fisher_dup_rpd_max <- fisher_dup_data %>% 
+  summarise(max=max(percent_rpd, na.rm = TRUE)) %>% 
+  round(digits = 1)
+
+fisher_dup_rpd_median <- fisher_dup_data %>% 
+  summarise(median=median(percent_rpd, na.rm = TRUE)) %>% 
+  round(digits = 1)
+
+fisher_dup_rpd_n <- length(fisher_dup_data$percent_rpd)
+
+```
+
+
+```{r mv_comparison, include=FALSE, warning=FALSE, message=FALSE}
+
+orion_mv <- orion_qc_data %>% 
+  
+  ggplot() +
+  geom_point(aes(x= analysis_date, y = mv_4), shape = 0, size = 3, na.rm = TRUE) +
+  geom_smooth(aes(x= analysis_date, y = mv_4), method="loess", level = 0.95, linetype = "solid", color = "black") +
+  geom_point(aes(x= analysis_date, y = mv_6), shape = 1, size = 3) +
+  geom_smooth(aes(x= analysis_date, y = mv_6), method="loess", level = 0.95, linetype = "solid", color = "black") +
+  geom_point(aes(x= analysis_date, y = mv_8), shape = 2, size = 3) +
+  geom_smooth(aes(x= analysis_date, y = mv_8), method="loess", level = 0.95, linetype = "solid", color = "black") +
+  xlab("Analysis date") +
+  ylab("mV") +
+  theme_SH_pubs() +
+  theme(axis.text.x = element_text(size = 10, angle = 90, hjust = 0.95, vjust = 0.2),
+        axis.title.x = element_text(size = 12),
+        axis.text.y = element_text(size = 10),
+        axis.title.y = element_text(size = 12)) + 
+  geom_segment(aes(x=as_date("2023-06-19"), y= 250, xend=as_date("2023-06-19"), yend=200), arrow=arrow(length=unit(0.3, 'cm'))) + 
+  annotate("text", x=as_date("2023-07-01"), y=260, label = "new electrode installed", size = 3) +
+  annotate("text", x=as_date("2023-06-19"), y=285, label = "A", fontface = "bold", size = 5) +
+  scale_y_continuous(breaks = c(-100, -50, 0, 50, 100, 150, 200, 250), limits = c(-100, 300)) +
+  scale_x_date(date_labels = "%b %Y")
+
+ggsave(here("rmarkdown", "orion_mV.pdf"), orion_mv)
+
+fisher_mv <- fisher_qc_data %>% 
+  
+  ggplot() +
+  geom_point(aes(x= analysis_date, y = mv_4), shape = 0, size = 3, na.rm = TRUE) +
+  geom_smooth(aes(x= analysis_date, y = mv_4), method="loess", level = 0.95, linetype = "solid", color = "black") +
+  geom_point(aes(x= analysis_date, y = mv_6), shape = 1, size = 3) +
+  geom_smooth(aes(x= analysis_date, y = mv_6), method="loess", level = 0.95, linetype = "solid", color = "black") +
+  geom_point(aes(x= analysis_date, y = mv_8), shape = 2, size = 3) +
+  geom_smooth(aes(x= analysis_date, y = mv_8), method="loess", level = 0.95, linetype = "solid", color = "black") +
+  xlab("Analysis date") +
+  ylab("mV") +
+  theme_SH_pubs() +
+  theme(axis.text.x = element_text(size = 10, angle = 90, hjust = 0.95, vjust = 0.2),
+        axis.title.x = element_text(size = 12),
+        axis.text.y = element_text(size = 10),
+        axis.title.y = element_text(size = 12)) + 
+  geom_segment(aes(x=as_date("2023-03-14"), y= 250, xend=as_date("2023-03-14"), yend=200), arrow=arrow(length=unit(0.3, 'cm'))) +
+  annotate("text", x=as_date("2023-04-02"), y=260, label = "new electrode installed", size = 3) +
+  annotate("text", x=as_date("2023-03-14"), y=285, label = "B", fontface = "bold", size = 5) +
+  scale_y_continuous(breaks = c(-100, -50, 0, 50, 100, 150, 200, 250), limits = c(-100, 300)) +
+  scale_x_date(date_labels = "%b %Y", date_breaks = "1 month")
+
+ggsave(here("rmarkdown", "fisher_mV.pdf"), fisher_mv)
+  
+# New electrode installed 14 March 2023
+
+mv_pH4_orion_n <- length(orion_qc_data$mv_4)
+
+mv_pH4_orion_mean <- orion_qc_data %>% 
+  summarise(mean=mean(mv_4, na.rm=TRUE)) %>% 
+  round(digits = 0)
+
+mv_pH4_orion_sd <- orion_qc_data %>% 
+  summarise(stdev=sd(mv_4, na.rm=TRUE)) %>% 
+  round(digits = 0)
+
+mv_pH4_orion_diff_mean <- orion_qc %>% 
+  summarise(mean=mean(mv_4_diff, na.rm=TRUE)) %>% 
+  round(digits = 0)
+
+mv_pH4_orion_diff_sd <- orion_qc %>% 
+  summarise(stdev=sd(mv_4_diff, na.rm=TRUE)) %>% 
+  round(digits = 0)
+
+mv_pH6_orion_n <- length(orion_qc_data$mv_6)
+
+mv_pH6_orion_mean <- orion_qc_data %>% 
+  summarise(mean=mean(mv_6, na.rm=TRUE)) %>% 
+  round(digits = 0)
+
+mv_pH6_orion_sd <- orion_qc_data %>% 
+  summarise(stdev=sd(mv_6, na.rm=TRUE)) %>% 
+  round(digits = 0)
+
+mv_pH6_orion_diff_mean <- orion_qc %>% 
+  summarise(mean=mean(mv_6_diff, na.rm=TRUE)) %>% 
+  round(digits = 0)
+
+mv_pH6_orion_diff_sd <- orion_qc %>% 
+  summarise(stdev=sd(mv_6_diff, na.rm=TRUE)) %>% 
+  round(digits = 0)
+
+mv_pH8_orion_n <- length(orion_qc_data$mv_8)
+
+mv_pH8_orion_mean <- orion_qc_data %>% 
+  summarise(mean=mean(mv_8, na.rm=TRUE)) %>% 
+  round(digits = 0)
+
+mv_pH8_orion_sd <- orion_qc_data %>% 
+  summarise(stdev=sd(mv_8, na.rm=TRUE)) %>% 
+  round(digits = 0)
+
+mv_pH8_orion_diff_mean <- orion_qc %>% 
+  summarise(mean=mean(mv_8_diff, na.rm=TRUE)) %>% 
+  round(digits = 0)
+
+mv_pH8_orion_diff_sd <- orion_qc %>% 
+  summarise(stdev=sd(mv_8_diff, na.rm=TRUE)) %>% 
+  round(digits = 0)
+
+mv_pH4_fisher_n <- length(fisher_qc_data$mv_4)
+
+mv_pH4_fisher_mean <- fisher_qc_data %>% 
+  summarise(mean=mean(mv_4, na.rm=TRUE)) %>% 
+  round(digits = 0)
+
+mv_pH4_fisher_sd <- fisher_qc_data %>% 
+  summarise(stdev=sd(mv_4, na.rm=TRUE)) %>% 
+  round(digits = 0)
+
+mv_pH4_fisher_diff_mean <- fisher_qc %>% 
+  summarise(mean=mean(mv_4_diff, na.rm=TRUE)) %>% 
+  round(digits = 0)
+
+mv_pH4_fisher_diff_sd <- fisher_qc %>% 
+  summarise(stdev=sd(mv_4_diff, na.rm=TRUE)) %>% 
+  round(digits = 0)
+
+mv_pH6_fisher_n <- length(fisher_qc_data$mv_6)
+
+mv_pH6_fisher_mean <- fisher_qc_data %>% 
+  summarise(mean=mean(mv_6, na.rm=TRUE)) %>% 
+  round(digits = 0)
+
+mv_pH6_fisher_sd <- fisher_qc_data %>% 
+  summarise(stdev=sd(mv_6, na.rm=TRUE)) %>% 
+  round(digits = 0)
+
+mv_pH6_fisher_diff_mean <- fisher_qc %>% 
+  summarise(mean=mean(mv_6_diff, na.rm=TRUE)) %>% 
+  round(digits = 0)
+
+mv_pH6_fisher_diff_sd <- fisher_qc %>% 
+  summarise(stdev=sd(mv_6_diff, na.rm=TRUE)) %>% 
+  round(digits = 0)
+
+mv_pH8_fisher_n <- length(fisher_qc_data$mv_8)
+
+mv_pH8_fisher_mean <- fisher_qc_data %>% 
+  summarise(mean=mean(mv_8, na.rm=TRUE)) %>% 
+  round(digits = 0)
+
+mv_pH8_fisher_sd <- fisher_qc_data %>% 
+  summarise(stdev=sd(mv_8, na.rm=TRUE)) %>% 
+  round(digits = 0)
+
+mv_pH8_fisher_diff_mean <- fisher_qc %>% 
+  summarise(mean=mean(mv_8_diff, na.rm=TRUE)) %>% 
+  round(digits = 0)
+
+mv_pH8_fisher_diff_sd <- fisher_qc %>% 
+  summarise(stdev=sd(mv_8_diff, na.rm=TRUE)) %>% 
+  round(digits = 0)
+
+
+```
+
+```{r slopes, include=FALSE, warning=FALSE, message=FALSE}
+
+slope <- 
+  
+  ggplot() +
+  geom_point(data = fisher_qc_data, aes(x= analysis_date, y = slope_calc), shape = 0, size = 3, na.rm = TRUE) +
+  geom_smooth(data = fisher_qc_data, aes(x= analysis_date, y = slope_calc), method="lm", level = 0.95, linetype = "dashed", color = "black") +
+  geom_point(data = orion_qc_data, aes(x= analysis_date, y = slope_calc), shape = 1, size = 3) +
+  geom_smooth(data = orion_qc_data, aes(x= analysis_date, y = slope_calc), method="lm", level = 0.95, linetype = "solid", color = "black") +
+  xlab("Analysis date") +
+  ylab("slope (mV/pH)") +
+  theme_SH_pubs() +
+  theme(axis.text.x = element_text(size = 10, angle = 90, hjust = 0.95, vjust = 0.2),
+        axis.title.x = element_text(size = 12),
+        axis.text.y = element_text(size = 10),
+        axis.title.y = element_text(size = 12)) + 
+  scale_x_date(date_labels = "%b %Y", date_breaks = "1 month")
+
+slope_fit_orion <- lm(slope_calc_orion ~ analysis_date, data = combined_qc)
+
+summary(slope_fit_orion)
+
+confint(slope_fit_orion)
+
+slope_fit_orion_coef <- coef(slope_fit_orion)
+
+slope_fit_orion_n <- length(slope_fit_orion$residuals)
+
+slope_fit_orion_intercept <- slope_fit_orion_coef["(Intercept)"] %>% 
+    round(digits = 0)
+
+slope_fit_orion_slope <- slope_fit_orion_coef["analysis_date"] %>% 
+  round(digits = 4) 
+
+slope_fit_orion_rsquared <- summary(slope_fit_orion)$r.squared %>% 
+  round(digits = 4)
+
+
+slope_fit_fisher <- lm(slope_calc_fisher ~ analysis_date, data = combined_qc)
+
+slope_fit_fisher_coef <- coef(slope_fit_fisher)
+
+summary(slope_fit_fisher)
+
+confint(slope_fit_fisher)
+
+slope_fit_fisher_n <- length(slope_fit_fisher$residuals)
+
+slope_fit_fisher_intercept <- slope_fit_fisher_coef["(Intercept)"] %>% 
+    round(digits = 0)
+
+slope_fit_fisher_slope <- slope_fit_fisher_coef["analysis_date"] %>% 
+  round(digits = 4)
+
+slope_fit_fisher_rsquared <- summary(slope_fit_fisher)$r.squared %>% 
+  round(digits = 4)
+
+
+ggsave(here("rmarkdown", "mV_slope.pdf"), slope)
+
+```
+
+```{r QAQC_ref, include=FALSE}
+
+orion_ref_mean <- combined_qc %>% 
+  summarise(mean=mean(ref_orion, na.rm=TRUE)) %>% 
+  round(digits = 2)
+
+orion_ref_sd <- combined_qc %>% 
+  summarise(stdev=sd(ref_orion, na.rm=TRUE)) %>% 
+  round(digits = 2)
+
+orion_ref_min <- combined_qc %>% 
+  summarise(min=min(ref_orion, na.rm = TRUE))
+
+orion_ref_max <- combined_qc %>% 
+  summarise(max=max(ref_orion, na.rm = TRUE)) %>% 
+  round(digits = 2)
+
+orion_ref_n <- length(combined_qc$ref_orion)
+
+fisher_ref_mean <- combined_qc %>% 
+  summarise(mean=mean(ref_fisher, na.rm=TRUE)) %>% 
+  round(digits = 2)
+
+fisher_ref_sd <- combined_qc %>% 
+  summarise(stdev=sd(ref_fisher, na.rm=TRUE)) %>% 
+  round(digits = 2)
+
+fisher_ref_min <- combined_qc %>% 
+  summarise(min=min(ref_fisher, na.rm = TRUE)) %>% 
+    round(digits = 2)
+
+fisher_ref_max <- combined_qc %>% 
+  summarise(max=max(ref_fisher, na.rm = TRUE)) %>% 
+  round(digits = 2)
+
+fisher_ref_n <- length(combined_qc$ref_fisher)
+
+ref_rpd_mean <- combined_qc %>% 
+  summarise(mean=mean(rpd, na.rm = TRUE)) %>% 
+  round(digits = 1)
+
+ref_rpd_sd <- combined_qc %>% 
+  summarise(stdev=sd(rpd, na.rm = TRUE)) %>% 
+  round(digits = 1)
+
+ref_rpd_max <- combined_qc %>% 
+  summarise(max=max(rpd, na.rm = TRUE)) %>% 
+  round(digits = 1)
+
+ref_rpd_min <- combined_qc %>% 
+  summarise(min=min(rpd, na.rm = TRUE)) %>% 
+  round(digits = 1)
+
+ref_rpd_n <- length(combined_qc$rpd)
+
+```
+
+```{r ref, include=FALSE, warning=FALSE, message=FALSE}
+
+ref_comparison_date <- combined_qc %>% 
+  
+  ggplot() +
+  geom_point(aes(x = analysis_date, y = ref_orion), shape = 1, size = 3, na.rm = TRUE) +
+  geom_smooth(aes(x = analysis_date, y = ref_orion), method="lm", level = 0.95, linetype = "solid", color = "black") +
+  geom_point(aes(x = analysis_date, y = ref_fisher), shape = 0, size = 3, na.rm = TRUE) +
+  geom_smooth(aes(x = analysis_date, y = ref_fisher), method="lm", level = 0.95, linetype = "dashed", color = "black") +
+  xlab("Analysis date") +
+  ylab("pH") +
+  theme_SH_pubs() +
+  theme(axis.text.x = element_text(size = 10, angle = 90, hjust = 0.95, vjust = 0.2),
+        axis.title.x = element_text(size = 12),
+        axis.text.y = element_text(size = 10),
+        axis.title.y = element_text(size = 12)) +
+  scale_x_date(date_labels = "%b %Y", date_breaks = "1 month")
+
+ref_date_fit_orion <- lm(ref_orion ~ analysis_date, data = combined_qc)
+
+summary(ref_date_fit_orion)
+
+confint(ref_date_fit_orion)
+
+ref_date_fit_orion_coef <- coef(ref_date_fit_orion)
+
+ref_date_orion_n <- length(ref_date_fit_orion$residuals)
+
+ref_date_orion_intercept <- ref_date_fit_orion_coef["(Intercept)"] %>% 
+    round(digits = 0)
+
+ref_date_orion_slope <- ref_date_fit_orion_coef["analysis_date"] %>% 
+  round(digits = 4)
+
+ref_date_fit_fisher <- lm(ref_fisher ~ analysis_date, data = combined_qc)
+
+summary(ref_date_fit_fisher)
+
+confint(ref_date_fit_fisher)
+
+ref_date_fisher_n <- length(ref_date_fit_fisher$residuals)
+
+ref_date_fit_fisher_coef <- coef(ref_date_fit_fisher)
+
+ref_date_fisher_intercept <- ref_date_fit_fisher_coef["(Intercept)"] %>% 
+    round(digits = 0)
+
+ref_date_fisher_slope <- ref_date_fit_fisher_coef["analysis_date"] %>% 
+  round(digits = 4)
+
+ggsave(here("rmarkdown", "ref_comparison_date.pdf"), ref_comparison_date)
+
+ref_comparison <- combined_qc %>% 
+  
+  ggplot() +
+  geom_point(aes(x = ref_fisher, y = ref_orion), shape = 1, size = 3, na.rm = TRUE) +
+  geom_smooth(aes(x = ref_fisher, y = ref_orion), method="lm", level = 0.95, linetype = "solid", color = "black") +
+ # stat_regline_equation(label.x= 6, label.y= 6.99 , aes(x = ref_fisher, y = ref_orion)) +
+#  stat_cor(label.x = 6, label.y = 6.80, aes(x = ref_fisher, y = ref_orion, label = paste(..rr.label.., ..p.label.., sep = "~`,`~"))) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dotted") +
+  xlab("Fisher pH") +
+  ylab("Orion Star pH") +
+  theme_SH_pubs() +
+  theme(axis.text.x = element_text(size = 10),
+        axis.title.x = element_text(size = 12),
+        axis.text.y = element_text(size = 10),
+        axis.title.y = element_text(size = 12)) +
+  xlim(6.5, 6.9) +
+  ylim(6.5, 6.9)
+
+ref_fit <- lm(ref_orion ~ ref_fisher, data = combined_qc)
+
+summary(ref_fit)
+
+confint(ref_fit)
+
+ref_fit_n <- length(ref_fit$residuals)
+
+ref_fit_coef <- coef(ref_fit)
+
+ref_fit_intercept <- ref_fit_coef["(Intercept)"] %>% 
+    round(digits = 0)
+
+ref_fit_slope <- ref_fit_coef["ref_fisher"] %>% 
+  round(digits = 2)
+
+ref_tidy_fit <- tidy(ref_fit, conf.int = TRUE)
+
+ref_fit_conf <- ref_tidy_fit %>% 
+  filter(term == 'ref_fisher')
+
+ref_fit_conf_low <- ref_fit_conf$conf.low %>% 
+  round(digits = 2)
+
+ref_fit_conf_high <- ref_fit_conf$conf.high %>% 
+  round(digits = 2)
+
+ref_fit_rsquared <- summary(ref_fit)$r.squared %>% 
+  round(digits = 2)
+
+ref_fit_pval_df <- ref_tidy_fit %>% 
+  filter(term == 'ref_fisher') %>% 
+  mutate(pval = case_when(p.value > 0.01 ~ "> 0.01"))
+
+ref_fit_pval <- ref_fit_pval_df$pval
+  
+ggsave(here("rmarkdown", "ref_comparison.pdf"), ref_comparison)
+
+ref_no_outliers <- combined_qc %>% 
+  filter(ref_orion < 6.8)
+
+ref_comparison_date_no_outliers <- ref_no_outliers %>% 
+  
+  ggplot() +
+  geom_point(aes(x = analysis_date, y = ref_orion), shape = 1, size = 3, na.rm = TRUE) +
+  geom_smooth(aes(x = analysis_date, y = ref_orion), method="lm", level = 0.95, linetype = "solid", color = "black") +
+  geom_point(aes(x = analysis_date, y = ref_fisher), shape = 0, size = 3, na.rm = TRUE) +
+  geom_smooth(aes(x = analysis_date, y = ref_fisher), method="lm", level = 0.95, linetype = "dashed", color = "black") +
+  xlab("Analysis date") +
+  ylab("pH") +
+  theme_SH_pubs() +
+  theme(axis.text.x = element_text(size = 10, angle = 90, hjust = 0.95, vjust = 0.2),
+        axis.title.x = element_text(size = 12),
+        axis.text.y = element_text(size = 10),
+        axis.title.y = element_text(size = 12)) +
+  scale_x_date(date_labels = "%b %Y", date_breaks = "1 month")
+
+ref_date_fit_orion_no_outliers <- lm(ref_orion ~ analysis_date, data = ref_no_outliers)
+
+summary(ref_date_fit_orion_no_outliers)
+
+confint(ref_date_fit_orion_no_outliers)
+
+ref_date_fit_orion_no_outliers_coef <- coef(ref_date_fit_orion_no_outliers)
+
+ref_date_orion_no_outliers_n <- length(ref_date_fit_orion_no_outliers$residuals)
+
+ref_date_orion_no_outliers_intercept <- ref_date_fit_orion_no_outliers_coef["(Intercept)"] %>% 
+    round(digits = 0)
+
+ref_date_orion_no_outliers_slope <- ref_date_fit_orion_no_outliers_coef["analysis_date"] %>% 
+  round(digits = 4)
+
+ref_date_fit_fisher_no_outliers <- lm(ref_fisher ~ analysis_date, data = ref_no_outliers)
+
+summary(ref_date_fit_fisher_no_outliers)
+
+confint(ref_date_fit_fisher_no_outliers)
+
+ref_date_fisher_no_outliers_n <- length(ref_date_fit_fisher_no_outliers$residuals)
+
+ref_date_fit_fisher_no_outliers_coef <- coef(ref_date_fit_fisher_no_outliers)
+
+ref_date_fisher_no_outliers_intercept <- ref_date_fit_fisher_no_outliers_coef["(Intercept)"] %>% 
+    round(digits = 0)
+
+ref_date_fisher_no_outliers_slope <- ref_date_fit_fisher_no_outliers_coef["analysis_date"] %>% 
+  round(digits = 4)
+
+ggsave(here("rmarkdown", "ref_comparison_date_no_outliers.pdf"), ref_comparison_date_no_outliers)
+
+ref_comparison_no_outliers <-  ref_no_outliers %>% 
+  
+  ggplot() +
+  geom_point(aes(x = ref_fisher, y = ref_orion), shape = 1, size = 3, na.rm = TRUE) +
+  geom_smooth(aes(x = ref_fisher, y = ref_orion), method="lm", level = 0.95, linetype = "solid", color = "black") +
+  geom_abline(slope = 1, intercept = 0, linetype = "dotted") +
+  xlab("Fisher pH") +
+  ylab("Orion Star pH") +
+  theme_SH_pubs() +
+  theme(axis.text.x = element_text(size = 10),
+        axis.title.x = element_text(size = 12),
+        axis.text.y = element_text(size = 10),
+        axis.title.y = element_text(size = 12)) +
+  xlim(6.5, 6.9) +
+  ylim(6.5, 6.9)
+
+ref_fit_no_outliers <- lm(ref_orion ~ ref_fisher, data = ref_no_outliers)
+
+summary(ref_fit_no_outliers)
+
+confint(ref_fit_no_outliers)
+
+ref_fit_no_outliers_n <- length(ref_fit_no_outliers$residuals)
+
+ref_fit_no_outliers_coef <- coef(ref_fit_no_outliers)
+
+ref_fit_no_outliers_intercept <- ref_fit_no_outliers_coef["(Intercept)"] %>% 
+    round(digits = 0)
+
+ref_fit_no_outliers_slope <- ref_fit_no_outliers_coef["ref_fisher"] %>% 
+  round(digits = 2)
+
+ref_tidy_fit_no_outliers <- tidy(ref_fit_no_outliers, conf.int = TRUE)
+
+ref_fit_no_outliers_conf <- ref_tidy_fit_no_outliers %>% 
+  filter(term == 'ref_fisher')
+
+ref_fit_no_outliers_conf_low <- ref_fit_no_outliers_conf$conf.low %>% 
+  round(digits = 2)
+
+ref_fit_no_outliers_conf_high <- ref_fit_no_outliers_conf$conf.high %>% 
+  round(digits = 2)
+
+ref_fit_no_outliers_rsquared <- summary(ref_fit_no_outliers)$r.squared %>% 
+  round(digits = 2)
+
+ref_fit_no_outliers_pval_df <- ref_tidy_fit_no_outliers %>% 
+  filter(term == 'ref_fisher') %>% 
+  mutate(pval = case_when(p.value < 0.01 ~ "< 0.01"))
+
+ref_fit_no_outliers_pval <- ref_fit_no_outliers_pval_df$pval
+  
+ggsave(here("rmarkdown", "ref_comparison_no_outliers.pdf"), ref_comparison_no_outliers)
+```
+
+
+```{r PT_results, include=FALSE, warning=FALSE, message=FALSE}
+
+pt_plot <- pt_data %>% 
+  
+  ggplot() +
+  geom_point(aes(x = ph_eccc, y = ph_orion), shape = 1, size = 3, na.rm = TRUE) +
+  geom_smooth(aes(x = ph_eccc, y = ph_orion), method="lm", level = 0.95, linetype = "solid", color = "black") +
+  geom_point(aes(x = ph_eccc, y = ph_fisher), shape = 0, size = 3, na.rm = TRUE) +
+  geom_smooth(aes(x = ph_eccc, y = ph_fisher), method="lm", level = 0.95, linetype = "dashed", color = "black") +
+  geom_abline(slope = 1, intercept = 0, linetype = "dotted") +
+  xlab("ECCC-PT pH") +
+  ylab("IISD-ELA pH") +
+  theme_SH_pubs() +
+  theme(axis.text.x = element_text(size = 10, hjust = 0.95, vjust = 0.2),
+        axis.title.x = element_text(size = 12),
+        axis.text.y = element_text(size = 10),
+        axis.title.y = element_text(size = 12)) +
+  xlim(4.5, 8.5) +
+  ylim(4.5, 8.5)
+
+ggsave(here("rmarkdown", "pt_plot.pdf"), pt_plot)
+
+orion_pt_fit <- lm(ph_orion ~ ph_eccc, data = pt_data)
+
+summary(orion_pt_fit)
+
+confint(orion_pt_fit)
+
+orion_pt_fit_n <- length(orion_pt_fit$residuals)
+
+orion_pt_fit_coef <- coef(orion_pt_fit)
+
+orion_pt_fit_intercept <- orion_pt_fit_coef["(Intercept)"] %>% 
+    round(digits = 0)
+
+orion_pt_fit_slope <- orion_pt_fit_coef["ph_eccc"] %>% 
+  round(digits = 2)
+
+orion_pt_tidy_fit <- tidy(orion_pt_fit, conf.int = TRUE)
+
+orion_pt_fit_conf <- orion_pt_tidy_fit %>% 
+  filter(term == 'ph_eccc')
+
+orion_pt_fit_conf_low <- orion_pt_fit_conf$conf.low %>% 
+  round(digits = 2)
+
+orion_pt_fit_conf_high <- orion_pt_fit_conf$conf.high %>% 
+  round(digits = 2)
+
+orion_pt_fit_rsquared <- summary(orion_pt_fit)$r.squared %>% 
+  round(digits = 2)
+
+orion_pt_fit_pval_df <- orion_pt_tidy_fit %>% 
+  filter(term == 'ph_eccc') %>% 
+  mutate(pval = case_when(p.value < 0.001 ~ "< 0.001"))
+
+orion_pt_fit_pval <- orion_pt_fit_pval_df$pval
+
+orion_pt_diff_mean <- pt_data %>% 
+  summarise(mean=mean(eccc_orion_diff, na.rm=TRUE)) %>% 
+  round(digits = 2)
+
+orion_pt_diff_sd <- pt_data %>% 
+  summarise(stdev=sd(eccc_orion_diff, na.rm=TRUE)) %>% 
+  round(digits = 2)
+
+orion_pt_diff_min <- pt_data %>% 
+  summarise(min=min(eccc_orion_diff, na.rm=TRUE)) %>% 
+  round(digits = 2)
+
+orion_pt_diff_max <- pt_data %>% 
+  summarise(max=max(eccc_orion_diff, na.rm=TRUE)) %>% 
+  round(digits = 2)
+
+orion_pt_rpd_mean <- pt_data %>% 
+  summarise(mean=mean(eccc_orion_rpd, na.rm=TRUE)) %>% 
+  round(digits = 1)
+
+orion_pt_rpd_sd <- pt_data %>% 
+  summarise(stdev=sd(eccc_orion_rpd, na.rm=TRUE)) %>% 
+  round(digits = 1)
+
+orion_pt_rpd_min <- pt_data %>% 
+  summarise(min=min(eccc_orion_rpd, na.rm=TRUE)) %>% 
+  round(digits = 1)
+
+orion_pt_rpd_max <- pt_data %>% 
+  summarise(max=max(eccc_orion_rpd, na.rm=TRUE)) %>% 
+  round(digits = 1)
+
+fisher_pt_fit <- lm(ph_orion ~ ph_eccc, data = pt_data)
+
+summary(fisher_pt_fit)
+
+confint(fisher_pt_fit)
+
+fisher_pt_fit_n <- length(fisher_pt_fit$residuals)
+
+fisher_pt_fit_coef <- coef(fisher_pt_fit)
+
+fisher_pt_fit_intercept <- fisher_pt_fit_coef["(Intercept)"] %>% 
+    round(digits = 0)
+
+fisher_pt_fit_slope <- fisher_pt_fit_coef["ph_eccc"] %>% 
+  round(digits = 2)
+
+fisher_pt_tidy_fit <- tidy(fisher_pt_fit, conf.int = TRUE)
+
+fisher_pt_fit_conf <- fisher_pt_tidy_fit %>% 
+  filter(term == 'ph_eccc')
+
+fisher_pt_fit_conf_low <- fisher_pt_fit_conf$conf.low %>% 
+  round(digits = 2)
+
+fisher_pt_fit_conf_high <- fisher_pt_fit_conf$conf.high %>% 
+  round(digits = 2)
+
+fisher_pt_fit_rsquared <- summary(fisher_pt_fit)$r.squared %>% 
+  round(digits = 2)
+
+fisher_pt_fit_pval_df <- fisher_pt_tidy_fit %>% 
+  filter(term == 'ph_eccc') %>% 
+  mutate(pval = case_when(p.value < 0.001 ~ "< 0.001"))
+
+fisher_pt_fit_pval <- fisher_pt_fit_pval_df$pval
+
+fisher_pt_diff_mean <- pt_data %>% 
+  summarise(mean=mean(eccc_fisher_diff, na.rm=TRUE)) %>% 
+  round(digits = 2)
+
+fisher_pt_diff_sd <- pt_data %>% 
+  summarise(stdev=sd(eccc_fisher_diff, na.rm=TRUE)) %>% 
+  round(digits = 2)
+
+fisher_pt_diff_min <- pt_data %>% 
+  summarise(min=min(eccc_fisher_diff, na.rm=TRUE)) %>% 
+  round(digits = 2)
+
+fisher_pt_diff_max <- pt_data %>% 
+  summarise(max=max(eccc_fisher_diff, na.rm=TRUE)) %>% 
+  round(digits = 2)
+
+fisher_pt_rpd_mean <- pt_data %>% 
+  summarise(mean=mean(eccc_fisher_rpd, na.rm=TRUE)) %>% 
+  round(digits = 1)
+
+fisher_pt_rpd_sd <- pt_data %>% 
+  summarise(stdev=sd(eccc_fisher_rpd, na.rm=TRUE)) %>% 
+  round(digits = 1)
+
+fisher_pt_rpd_min <- pt_data %>% 
+  summarise(min=min(eccc_fisher_rpd, na.rm=TRUE)) %>% 
+  round(digits = 1)
+
+fisher_pt_rpd_max <- pt_data %>% 
+  summarise(max=max(eccc_fisher_rpd, na.rm=TRUE)) %>% 
+  round(digits = 1)
+
+fisher_v_orion_pt <- pt_data %>% 
+   
+  ggplot() +
+  geom_point(aes(x = ph_fisher, y = ph_orion), shape = 1, size = 3, na.rm = TRUE) +
+  geom_smooth(aes(x = ph_fisher, y = ph_orion), method="lm", level = 0.95, linetype = "solid", color = "black") +
+  geom_abline(slope = 1, intercept = 0, linetype = "dotted") +
+  xlab("Fisher Accumet pH") +
+  ylab("Orion Star pH") +
+  theme_SH_pubs() +
+  theme(axis.text.x = element_text(size = 10, hjust = 0.95, vjust = 0.2),
+        axis.title.x = element_text(size = 12),
+        axis.text.y = element_text(size = 10),
+        axis.title.y = element_text(size = 12)) +
+  xlim(4.5, 8.5) +
+  ylim(4.5, 8.5)
+
+ggsave(here("rmarkdown", "fisher_v_orion_pt.pdf"), fisher_v_orion_pt)
+
+fisher_v_orion_pt_fit <- lm(ph_orion ~ ph_fisher, data = pt_data)
+
+summary(fisher_v_orion_pt_fit)
+
+confint(fisher_v_orion_pt_fit)
+
+fisher_v_orion_pt_fit_n <- length(fisher_v_orion_pt_fit$residuals)
+
+fisher_v_orion_pt_fit_coef <- coef(fisher_v_orion_pt_fit)
+
+fisher_v_orion_pt_fit_intercept <- fisher_v_orion_pt_fit_coef["(Intercept)"] %>% 
+    round(digits = 0)
+
+fisher_v_orion_pt_fit_slope <- fisher_v_orion_pt_fit_coef["ph_fisher"] %>% 
+  round(digits = 2)
+
+fisher_v_orion_pt_tidy_fit <- tidy(fisher_v_orion_pt_fit, conf.int = TRUE)
+
+fisher_v_orion_pt_fit_conf <- fisher_v_orion_pt_tidy_fit %>% 
+  filter(term == 'ph_fisher')
+
+fisher_v_orion_pt_fit_conf_low <- fisher_v_orion_pt_fit_conf$conf.low %>% 
+  round(digits = 2)
+
+fisher_v_orion_pt_fit_conf_high <- fisher_v_orion_pt_fit_conf$conf.high %>% 
+  round(digits = 2)
+
+fisher_v_orion_pt_fit_rsquared <- summary(fisher_v_orion_pt_fit)$r.squared %>% 
+  round(digits = 2)
+
+fisher_v_orion_pt_fit_pval_df <- fisher_v_orion_pt_tidy_fit %>% 
+  filter(term == 'ph_fisher') %>% 
+  mutate(pval = case_when(p.value < 0.001 ~ "< 0.001"))
+
+fisher_v_orion_pt_fit_pval <- fisher_v_orion_pt_fit_pval_df$pval
+
+fisher_v_orion_pt_diff_mean <- pt_data %>% 
+  summarise(mean=mean(orion_fisher_diff, na.rm=TRUE)) %>% 
+  round(digits = 2)
+
+fisher_v_orion_pt_diff_sd <- pt_data %>% 
+  summarise(stdev=sd(orion_fisher_diff, na.rm=TRUE)) %>% 
+  round(digits = 2)
+
+fisher_v_orion_pt_diff_min <- pt_data %>% 
+  summarise(min=min(orion_fisher_diff, na.rm=TRUE)) %>% 
+  round(digits = 2)
+
+fisher_v_orion_pt_diff_max <- pt_data %>% 
+  summarise(max=max(orion_fisher_diff, na.rm=TRUE)) %>% 
+  round(digits = 2)
+
+fisher_v_orion_pt_rpd_mean <- pt_data %>% 
+  summarise(mean=mean(orion_fisher_rpd, na.rm=TRUE)) %>% 
+  round(digits = 1)
+
+fisher_v_orion_pt_rpd_sd <- pt_data %>% 
+  summarise(stdev=sd(orion_fisher_rpd, na.rm=TRUE)) %>% 
+  round(digits = 1)
+
+fisher_v_orion_pt_rpd_min <- pt_data %>% 
+  summarise(min=min(orion_fisher_rpd, na.rm=TRUE)) %>% 
+  round(digits = 1)
+
+fisher_v_orion_pt_rpd_max <- pt_data %>% 
+  summarise(max=max(orion_fisher_rpd, na.rm=TRUE)) %>% 
+  round(digits = 1)
+```
+
+
+```{r fisher_v_orion_samples, include=FALSE, warning=FALSE, message=FALSE}
+
+fisher_v_orion <- comparison_data %>% 
+  
+  ggplot(aes(x = accumet, y = orion)) +
+  geom_point(shape = 1, size = 3) +
+  geom_smooth(method="lm", level = 0.95, linetype = "solid", color = "black") +
+  geom_abline(slope = 1, intercept = 0, linetype = "dotted") +
+  #stat_regline_equation(label.x= 4, label.y= 9.8 , aes(x = accumet, y = orion)) +
+  #stat_cor(label.x = 4, label.y = 9.3, aes(x = accumet, y = orion, label = paste(..rr.label.., ..p.label.., sep = "~`,`~"))) +
+  # ggtitle("Fisher Accumet vs. Orion pH Meter") + # don't need the title, latex caption will suffice
+  # theme(plot.title = element_text(size = 12, hjust = 0.5)) +
+  xlab("Fisher Accumet pH") +
+  ylab("Orion Star pH") +
+  xlim(4, 10) +
+  ylim(4, 10) +
+  theme_SH_pubs()
+
+ggsave(here("rmarkdown", "fisher_v_orion.pdf"), fisher_v_orion)
+
+pH_fit <- lm(orion ~ accumet, data = comparison_data)
+
+summary(pH_fit)
+
+confint(pH_fit)
+
+pH_fit_coef <- coef(pH_fit)
+
+pH_fit_n <- length(pH_fit$residuals)
+
+pH_fit_intercept <- pH_fit_coef["(Intercept)"] %>% 
+    round(digits = 2)
+
+pH_fit_slope <- pH_fit_coef["accumet"] %>% 
+  round(digits = 2) 
+
+pH_tidy_fit <- tidy(pH_fit, conf.int = TRUE)
+
+pH_fit_conf <- pH_tidy_fit %>% 
+  filter(term == 'accumet')
+
+pH_fit_conf_low <- pH_fit_conf$conf.low %>% 
+  round(digits = 2)
+
+pH_fit_conf_high <- pH_fit_conf$conf.high %>% 
+  round(digits = 2)
+
+pH_fit_rsquared <- summary(pH_fit)$r.squared %>% 
+  round(digits = 2)
+
+pH_fit_pval_df <- pH_tidy_fit %>% 
+  filter(term == 'accumet') %>% 
+  mutate(pval = case_when(p.value < 0.001 ~ "< 0.001"))
+
+pH_fit_pval <- pH_fit_pval_df$pval
+
+pH_rpd_mean <- comparison_data %>% 
+  summarise(mean=mean(rpd, d=2, na.rm=TRUE)) %>% 
+  round(digits = 1)
+
+pH_rpd_sd <- comparison_data %>% 
+  summarise(stdev=sd(rpd, na.rm=TRUE)) %>% 
+  round(digits = 1)
+
+pH_rpd_max <- comparison_data %>% 
+  summarize(max=max(rpd, na.rm=TRUE)) %>% 
+  round(digits = 1)
+
+pH_rpd_above_8_5 <- comparison_data %>% 
+  filter(between(rpd, 8.5, 10)) %>% 
+  summarize(max=max(rpd, na.rm = TRUE)) %>% 
+  round(digits = 1)
+
+
+comp_data_rpd_above_5 <- comparison_data %>% 
+  filter(rpd > 5)
+
+comp_data_rpd_below_5 <- comparison_data %>% 
+  filter(rpd <= 5)
+
+pH_rpd_above_5_n <- length(comp_data_rpd_above_5$rpd)
+
+pH_rpd_above_5_percent <- ((pH_rpd_above_5_n / pH_fit_n)*100) %>% 
+  round(digits = 1)
+
+pH_rpd_below_5_n <- length(comp_data_rpd_below_5$rpd)
+
+pH_rpd_below_5_percent <- ((pH_rpd_below_5_n / pH_fit_n)*100) %>% 
+  round(digits = 1)
+```
+```{r comparison_above_8, include=FALSE, warning=FALSE, message=FALSE}
+
+comp_data_above_8 <- comparison_data %>% 
+  filter(orion > 8)
+
+comp_data_below_8 <- comparison_data %>% 
+  filter(orion < 8)
+
+fisher_v_orion_above_8 <- comp_data_above_8 %>% 
+  
+  ggplot(aes(x = accumet, y = orion)) +
+  geom_point(shape = 1, size = 3) +
+  geom_smooth(method="lm", level = 0.95, linetype = "solid", color = "black") +
+  geom_abline(slope = 1, intercept = 0, linetype = "dotted") +
+  xlab("Fisher Accumet pH") +
+  ylab("Orion Star pH") +
+  xlim(8, 10) +
+  ylim(8, 10) +
+  theme_SH_pubs()
+
+ggsave(here("rmarkdown", "fisher_v_orion_above_8.pdf"), fisher_v_orion_above_8)
+
+pH_above_8_fit <- lm(orion ~ accumet, data = comp_data_above_8)
+
+summary(pH_above_8_fit)
+
+confint(pH_above_8_fit)
+
+pH_above_8_fit_coef <- coef(pH_above_8_fit)
+
+pH_above_8_fit_n <- length(pH_above_8_fit$residuals)
+
+pH_above_8_fit_intercept <- pH_above_8_fit_coef["(Intercept)"] %>% 
+    round(digits = 2)
+
+pH_above_8_fit_slope <- pH_above_8_fit_coef["accumet"] %>% 
+  round(digits = 2) 
+
+pH_above_8_tidy_fit <- tidy(pH_above_8_fit, conf.int = TRUE)
+
+pH_above_8_fit_conf <- pH_above_8_tidy_fit %>% 
+  filter(term == 'accumet')
+
+pH_above_8_fit_conf_low <- pH_above_8_fit_conf$conf.low %>% 
+  round(digits = 2)
+
+pH_above_8_fit_conf_high <- pH_above_8_fit_conf$conf.high %>% 
+  round(digits = 2)
+
+pH_above_8_fit_rsquared <- summary(pH_above_8_fit)$r.squared %>% 
+  round(digits = 2)
+
+pH_above_8_fit_pval_df <- pH_above_8_tidy_fit %>% 
+  filter(term == 'accumet') %>% 
+  mutate(pval = case_when(p.value < 0.001 ~ "< 0.001"))
+
+pH_above_8_fit_pval <- pH_above_8_fit_pval_df$pval
+
+pH_above_8_rpd_mean <- comp_data_above_8 %>% 
+  summarise(mean=mean(rpd, d=2, na.rm=TRUE)) %>% 
+  round(digits = 1)
+
+pH_above_8_rpd_sd <- comp_data_above_8 %>% 
+  summarise(stdev=sd(rpd, na.rm=TRUE)) %>% 
+  round(digits = 1)
+
+pH_above_8_rpd_max <- comp_data_above_8 %>% 
+  summarize(max=max(rpd, na.rm=TRUE)) %>% 
+  round(digits = 1)
+
+
+fisher_v_orion_below_8 <- comp_data_below_8 %>% 
+  
+  ggplot(aes(x = accumet, y = orion)) +
+  geom_point(shape = 1, size = 3) +
+  geom_smooth(method="lm", level = 0.95, linetype = "solid", color = "black") +
+  geom_abline(slope = 1, intercept = 0, linetype = "dotted") +
+  xlab("Fisher Accumet pH") +
+  ylab("Orion Star pH") +
+  xlim(4, 8) +
+  ylim(4, 8) +
+  theme_SH_pubs()
+
+ggsave(here("rmarkdown", "fisher_v_orion_below_8.pdf"), fisher_v_orion_below_8)
+
+pH_below_8_fit <- lm(orion ~ accumet, data = comp_data_below_8)
+
+summary(pH_below_8_fit)
+
+confint(pH_below_8_fit)
+
+pH_below_8_fit_coef <- coef(pH_below_8_fit)
+
+pH_below_8_fit_n <- length(pH_below_8_fit$residuals)
+
+pH_below_8_fit_intercept <- pH_below_8_fit_coef["(Intercept)"] %>% 
+    round(digits = 2)
+
+pH_below_8_fit_slope <- pH_below_8_fit_coef["accumet"] %>% 
+  round(digits = 2) 
+
+pH_below_8_tidy_fit <- tidy(pH_below_8_fit, conf.int = TRUE)
+
+pH_below_8_fit_conf <- pH_below_8_tidy_fit %>% 
+  filter(term == 'accumet')
+
+pH_below_8_fit_conf_low <- pH_below_8_fit_conf$conf.low %>% 
+  round(digits = 2)
+
+pH_below_8_fit_conf_high <- pH_below_8_fit_conf$conf.high %>% 
+  round(digits = 2)
+
+pH_below_8_fit_rsquared <- summary(pH_below_8_fit)$r.squared %>% 
+  round(digits = 2)
+
+pH_below_8_fit_pval_df <- pH_below_8_tidy_fit %>% 
+  filter(term == 'accumet') %>% 
+  mutate(pval = case_when(p.value < 0.001 ~ "< 0.001"))
+
+pH_below_8_fit_pval <- pH_below_8_fit_pval_df$pval
+
+pH_below_8_rpd_mean <- comp_data_below_8 %>% 
+  summarise(mean=mean(rpd, d=2, na.rm=TRUE)) %>% 
+  round(digits = 1)
+
+pH_below_8_rpd_sd <- comp_data_below_8 %>% 
+  summarise(stdev=sd(rpd, na.rm=TRUE)) %>% 
+  round(digits = 1)
+
+pH_below_8_rpd_max <- comp_data_below_8 %>% 
+  summarize(max=max(rpd, na.rm=TRUE)) %>% 
+  round(digits = 1)
+
+
+```
+
+
+\section{Orion Star pH Meter Cross Comparison Report}
+IISD Experimental Lakes Area Analytical Service Laboratory\
+Sonya Havens\
+`r Sys.Date()`
+
+\subsection{Thermo Scientific\textsuperscript{TM} Orion Star\textsuperscript{TM} A211 Benchtop pH Meter}
+
+The Thermo Scientific^TM^ Orion Star^TM^ A211 Benchtop pH Meter was purchased from Fisher Scientific 23 March 2023 and included the following parts:
+
+* Star A211 pH meter
+* 8172BNWP ROSS Sure-Flow glass-body pH electrode
+* 927007MD stainless steel ATC probe
+* 810199 pH buffer kit
+* electrode stand
+* 100-240V universal power adapter
+* computer cable
+
+The Thermo Scientific^TM^ Orion Star^TM^ A211 pH Meter was received 7 April 2023, installed on 12 June 2023, and used to measure pH in samples collected from 12 June 2023 to 6 September 2023 (*n* = `r pH_fit_n`) that were also measured on the Fisher Accumet Benchtop pH Meter. Samples from the Environment and Climate Change Canada Proficiency Testing study (ECCC-PT) were also analyzed on both the Orion Star pH meter and the Fisher Accumet pH meter and compared with ECCC-PT results. Instrument performance data (e.g. precision estimates, instrument response stability, and reference sample comparison) is also provided.
+
+\subsection{Analytical precision}
+
+The analytical precision (*Pr*), which is based on the residuals of the standard buffers response along the calibration curve, is calculated for each run using the measured response (mV) of standard buffers and equations 1 through 3:
+
+Equation 1.	$Pr = (y_d-b)/m$
+
+where *b* is the y-intercept, *m* is the slope, and *y~d~* is the signal detection limit, which is calculated using equation 2.
+
+Equation 2. $y_d = 3s_y+b$
+
+where *s~y~* is the residuals between the measured response (mV) for each standard buffer and the calibration curve predicted response (mV) for each standard concentration and is calculated using equation 3.
+
+Equation 3.	$s_y = √((∑d_i^2 )/(n-2))$
+
+where *n* is the number of standards in the calibration curve, and *d~i~* is the difference between the measured response (mV) for each standard buffer and the calibration curve predicted response (mV) for each standard buffer.
+
+The average analytical precision of pH measured on the Orion Star pH meter and Fisher Accumet pH meter during the cross comparison period (14 March 2023 to 3 November 2023) were similar (`r orion_lod_mean` ± `r orion_lod_sd` SU, *n* = `r orion_lod_n` and `r fisher_lod_mean` ± `r fisher_lod_sd` SU, *n* = `r fisher_lod_n`, respectively).
+
+\subsection{Replication precision}
+
+Sample replicates are conducted every 15 to 20 samples. The average relative percent difference (RPD) of replicated samples, calculated using equation 4, was `r orion_dup_rpd_mean`% ± `r orion_dup_rpd_sd`% (max = `r orion_dup_rpd_max`%, *n* = `r orion_dup_rpd_n`) and `r fisher_dup_rpd_mean`% ± `r fisher_dup_rpd_sd`% (max = `r fisher_dup_rpd_max`%, *n* = `r fisher_dup_rpd_n`) for replicated samples on the Orion Star pH meter and on the Fisher Accumet pH meter, respectively.
+
+Equation 4. $RPD = ((C_1-C_2)/((C_1+C_2)/2)) x 100$
+
+where *C~1~* and *C~2~* are the concentrations of the two replicates. 
+
+\subsection{Millivolt stability and calibration slope}
+\begin{figure}[h]
+  \vspace{-0.4cm}
+  \begin{subfigure}{0.48\textwidth}
+  \includegraphics[]{orion_mV.pdf}
+  \end{subfigure}%
+  \begin{subfigure}{0.48\textwidth}
+  \includegraphics[]{fisher_mV.pdf}
+  \end{subfigure}
+\caption{pH meter signal response (mV) of pH 4 ($\square$), pH 6 ($\bigcirc$), and pH 8 ($\bigtriangleup$) buffers on the Orion Star pH meter from 19 June 2023 to 3 November 2023 (A) and on the Fisher Accumet pH meter from 14 March 2023 to 30 October 2023 (B).}
+\end{figure}
+
+\begin{wrapfigure}[18]{r}{0.45\textwidth}
+  \vspace{-0.6cm}
+  \includegraphics[width=0.45\textwidth]{mV_slope.pdf}
+  \caption{Slope of pH meter calibrations of analytical runs on the Orion Star pH meter ($\bigcirc$, \protect\solidline, $\mbox{\textit{y}=`r slope_fit_orion_slope`}$$\textit{x}$$\mbox{`r slope_fit_orion_intercept`}$, $\mbox{\textit{n}=`r slope_fit_orion_n`}$) from 19 June 2023 to 3 November 2023 and with the Fisher Accumet pH meter ($\square$, \protect\dashedline, $\mbox{\textit{y}=`r slope_fit_fisher_slope`}$$\textit{x}$$\mbox{`r slope_fit_fisher_intercept`}$, $\mbox{\textit{n}=`r slope_fit_fisher_n`}$) from 14 March 2023 to 30 October 2023.}
+\end{wrapfigure}
+The millivolt (mV) pH meter response values were stable throughout the cross comparison study on the Orion Star pH meter, while the mV values were stable until mid-September on the Fisher Accumet pH meter, at which point the mV values of each pH buffer started to increase. The literature established mV values for pH 4, 6, and 8 are 177, 59, and -59, respectively. The average mV values for pH 4, 6, and 8 were `r mv_pH4_orion_mean` ± `r mv_pH4_orion_sd`, `r mv_pH6_orion_mean` ± `r mv_pH6_orion_sd`, and `r mv_pH8_orion_mean` ± `r mv_pH8_orion_sd` (*n* = `r mv_pH4_orion_n`), respectively, on the Orion Star pH meter, which were lower than literature established values by `r mv_pH4_orion_diff_mean` ± `r mv_pH4_orion_diff_sd`, `r mv_pH6_orion_diff_mean` ± `r mv_pH6_orion_diff_sd`, and `r mv_pH8_orion_diff_mean` ± `r mv_pH8_orion_diff_sd`, on average. The average mV values for pH 4, 6, and 8 on the Fisher Accumet pH meter (`r mv_pH4_fisher_mean` ± `r mv_pH4_fisher_sd`, `r mv_pH6_fisher_mean` ± `r mv_pH6_fisher_sd`, and `r mv_pH8_fisher_mean` ± `r mv_pH8_fisher_sd`, respectively, *n* = `r mv_pH4_fisher_n`), were higher than established values by `r mv_pH4_fisher_diff_mean` ± `r mv_pH4_fisher_diff_sd`, `r mv_pH6_fisher_diff_mean` ± `r mv_pH6_fisher_diff_sd`, and `r mv_pH8_fisher_diff_mean` ± `r mv_pH8_fisher_diff_sd`, on average, but closer to literature established values than those measured on the Orion Star pH meter.
+
+Despite the stability of the mV values of pH buffers measured on the Orion Star pH meter, the slope of the calibration curve increased over time (Figure 2). The slope started out near the "ideal" slope of -59 mV/pH, then  slowly increased to ~-58 mV/pH. The slope of the calibration curve on the Fisher Accumet pH meter was stable over time (Figure 2), however, there was more variability in the slopes of the Fisher Accumet calibrations (*R^2^* = `r slope_fit_fisher_rsquared`) than in the slopes of the Orion Star calibrations (*R^2^* = `r slope_fit_orion_rsquared`). 
+\pagebreak
+
+\subsection{Reference samples}
+
+\begin{wrapfigure}[17]{r}{0.45\textwidth}
+  \vspace{-0.7cm}
+  \includegraphics[width=0.45\textwidth]{ref_comparison_date.pdf}
+  \caption{The pH of reference sample measured with the Orion Star pH meter ($\bigcirc$, \protect\solidline, $\mbox{\textit{y}=`r ref_date_orion_slope`}$$\textit{x}$$+$$\mbox{`r ref_date_orion_intercept`}$, $\mbox{\textit{n}=`r ref_date_orion_n`}$) and with the Fisher Accumet pH meter ($\square$, \protect\dashedline, $\mbox{\textit{y}=`r ref_date_fisher_slope`}$$\textit{x}$$+$$\mbox{`r ref_date_fisher_intercept`}$, $\mbox{\textit{n}=`r ref_date_fisher_n`}$) from June 2023 to September 2023.}
+\end{wrapfigure}
+A reference sample is included in each analytical run. The average pH result of reference samples measured on the Orion Star and Fisher Accumet were similar (`r orion_ref_mean` ± `r orion_ref_sd`, *n* = `r orion_ref_n` and `r fisher_ref_mean` ± `r fisher_ref_sd`, *n* = `r fisher_ref_n`, respectively). The pH of the reference sample, measured by both the Orion Star and Fisher Accumet pH meters, slowly declined over time (Figure 3). This was likely due to CO~2~ dissolution into the reference sample bottle. The reference sample is lake 239 epilimnetic water that has been aged for at least one year prior to use so that the chemical constituents can stabilize and come to equilibrium with the atmosphere. These reference sample pH results reveal that the sample must not be equilibrated with the atmosphere, which is likely due to the large volume of the sample. Going forward the sample should be stored with a large head space and shaken before use to ensure that the sample is equilibrated with the atmosphere. 
+
+The pH results of reference samples were not well correlated among the two pH meters (Figure 4, *R^2^* = `r ref_fit_rsquared`, *p*`r ref_fit_pval`) with the pH measured on the Orion Star pH meter ranging from `r orion_ref_min` to `r orion_ref_max` and the pH measured on the Fisher Accumet pH meter ranging from `r fisher_ref_min` to `r fisher_ref_max`. 
+
+Five pH measurements of the reference sample using the Orion Star pH meter were higher (pH > 6.8) than what would be expected by the long-term trend (Figure 3). These outliers did not correspond to elevated analytical precision values or out of range calibration slopes. When these five outliers are removed, the correlation between pH measured on the Orion Star pH meter and the Fisher Accumet pH meter is improved (*R^2^* = `r ref_fit_no_outliers_rsquared`) and is statistically significant (*p* `r ref_fit_no_outliers_pval`). However, the slope of the linear model (`r ref_fit_no_outliers_slope`) indicates there is a bias, wherein the Fisher Accumet pH meter had higher pH value than those witnessed on the Orion Star pH meter. 
+
+Despite the bias, the maximum RPD between the pH measured using the Orion Star and the Fisher Accumet pH meters was `r ref_rpd_max`%, with an average RPD of `r ref_rpd_mean`% ± `r ref_rpd_sd`%. 
+
+\restylefloat*{figure}
+\begin{figure}[hb]
+  \begin{minipage}[t]{0.48\textwidth}
+    \centering
+    \includegraphics[width=0.98\textwidth]{ref_comparison.pdf}
+    \caption{Comparison of pH results of reference sample measured with the Orion Star pH meter and with the Fisher Accumet pH meter ($\mbox{\textit{y}=`r ref_fit_slope`}$$\textit{x}$$+$$\mbox{`r ref_fit_intercept`}$, $\mbox{\textit{n}=`r ref_fit_n`}$, $\textit{R}$$^2$$\mbox{=`r ref_fit_rsquared`}$, $\mbox{\textit{p} `r ref_fit_pval`}$) from June 2023 to September 2023.}
+  \end{minipage}
+  \hfill
+  \begin{minipage}[t]{0.48\textwidth}
+    \centering
+    \includegraphics[width=0.98\textwidth]{ref_comparison_no_outliers.pdf}
+    \caption{Comparison of pH results of reference sample measured with the Orion Star pH meter and with the Fisher Accumet pH meter from June 2023 to September 2023, with outliers (pH > 6.8) removed ($\mbox{\textit{y}=`r ref_fit_no_outliers_slope`}$$\textit{x}$$+$$\mbox{`r ref_fit_no_outliers_intercept`}$, $\mbox{\textit{n}=`r ref_fit_no_outliers_n`}$, $\textit{R}$$^2$$\mbox{=`r ref_fit_no_outliers_rsquared`}$, $\mbox{\textit{p} `r ref_fit_no_outliers_pval`}$).}
+  \end{minipage}
+\end{figure}
+\pagebreak
+
+\subsection{Proficienty testing samples}
+
+The pH results from the Environment and Climate Change Canada Proficiency Testing (ECCC-PT) program were significantly correlated with those obtained from the Orion Star pH meter and the Fisher Accumet pH meter (Figure 6). While the 95% confidence intervals for the slopes of the ECCC-PT versus Orion Star pH meter and the Fisher Accumet linear models were the same (between `r orion_pt_fit_conf_low` and `r orion_pt_fit_conf_high`), the linear regression lines fall below the 1:1 line, indicating a bias wherein ECCC-PT pH results were consistently higher than pH results obtained from the Orion Star pH meter and the Fisher Accumet pH meter (Figure 6). The average RPD between the ECCC-PT pH and the Orion Star pH was `r orion_pt_rpd_mean`% ± `r orion_pt_rpd_sd`% (max = `r orion_pt_rpd_max`%, *n* = `r orion_pt_fit_n`) and was `r fisher_pt_rpd_mean`% ± `r fisher_pt_rpd_sd`% (max = `r fisher_pt_rpd_max`%, *n* = `r fisher_pt_fit_n`) between the ECCC-PT pH and the Fisher Accumet pH. The pH results of ECCC-PT samples measured with the Orion Star pH meter and with the Fisher Accumet pH meter were significantly correlated (Figure 7) with a 1:1 ratio (95% confidence interval for the slope of the Fisher Accumet versus Orion Star linear model was between `r fisher_v_orion_pt_fit_conf_low` and `r fisher_v_orion_pt_fit_conf_high`). 
+
+\restylefloat*{figure}
+\begin{figure}[h]
+  \begin{minipage}[t]{0.48\textwidth}
+    \centering
+    \includegraphics[width=0.98\textwidth]{pt_plot.pdf}
+    \caption{Comparison of pH results from the Environment and Climate Change Canada Proficiency Testing (ECCC-PT) program and those obtained from the Orion Star pH meter ($\bigcirc$, \protect\solidline, $\mbox{\textit{y}=`r orion_pt_fit_slope`}$$\textit{x}$$+$$\mbox{`r orion_pt_fit_intercept`}$, $\mbox{\textit{n}=`r orion_pt_fit_n`}$, $\textit{R}$$^2$$\mbox{=`r orion_pt_fit_rsquared`}$, $\mbox{\textit{p} `r orion_pt_fit_pval`}$) and from the Fisher Accumet pH meter ($\square$, \protect\dashedline, $\mbox{\textit{y}=`r fisher_pt_fit_slope`}$$\textit{x}$$+$$\mbox{`r fisher_pt_fit_intercept`}$, $\mbox{\textit{n}=`r fisher_pt_fit_n`}$, $\textit{R}$$^2$$\mbox{=`r fisher_pt_fit_rsquared`}$, $\mbox{\textit{p} `r fisher_pt_fit_pval`}$.}
+  \end{minipage}
+  \hfill
+  \begin{minipage}[t]{0.48\textwidth}
+    \centering
+    \includegraphics[width=0.98\textwidth]{fisher_v_orion_pt.pdf}
+    \caption{Comparison of pH results of Environment and Climate Change Canada Proficiency Testing samples measured with the Orion Star pH meter and with the Fisher Accumet pH meter ($\mbox{\textit{y}=`r fisher_v_orion_pt_fit_slope`}$$\textit{x}$$+$$\mbox{`r fisher_v_orion_pt_fit_intercept`}$, $\mbox{\textit{n}=`r fisher_v_orion_pt_fit_n`}$, $\textit{R}$$^2$$\mbox{=`r fisher_v_orion_pt_fit_rsquared`}$, $\mbox{\textit{p} `r fisher_v_orion_pt_fit_pval`}$).}
+  \end{minipage}
+\end{figure}
+
+\subsection{Comparison with Fisher Accumet pH results}
+
+\begin{wrapfigure}[16]{r}{0.45\textwidth}
+  \vspace{-0.63cm}
+  \includegraphics[width=0.45\textwidth]{fisher_v_orion.pdf}
+  \caption{Comparison of pH results of samples measured on the Fisher Accumet pH meter and the Orion Star pH meter, $\mbox{\textit{y}=`r pH_fit_slope`}$$\textit{x}$$\mbox{`r pH_fit_intercept`}$, $\mbox{\textit{n}=`r pH_fit_n`}$, $\textit{R}$$^2$$\mbox{=`r pH_fit_rsquared`}$, $\mbox{\textit{p} `r pH_fit_pval`}$.}
+\end{wrapfigure}
+
+The pH of samples measured on the Orion Star pH meter and on the Fisher Accumet pH meter were significantly correlated (Figure 8, *R^2^* = `r pH_fit_rsquared`, *p* `r pH_fit_pval`). The 95% confidence interval for the slope of the Fisher Accumet pH meter versus Orion Star pH meter linear model for pH was between `r pH_fit_conf_low` and `r pH_fit_conf_high`, indicating that there is a slight bias, wherein the pH measured using the Orion Star pH meter was slightly higher than when measured using the Fisher Accumet pH meter (Figure 8). This bias occurred primarily at pH above 8 (Figure 9). There is no bias when only samples with pH below 8 are considered (Figure 10) and the 95% confidence interval for the slope of the Fisher Accumet pH meter versus Orion Star pH meter linear model for pH below 8 was between `r pH_below_8_fit_conf_low` and `r pH_below_8_fit_conf_high`.
+
+Regardless of this bias, the average RPD between pH measured using the Orion Star pH meter and measured using the Fisher Accumet pH meter was only `r pH_rpd_mean`% ± `r pH_rpd_sd`%. There were `r pH_rpd_above_5_n` out of `r pH_fit_n` samples  (`r pH_rpd_above_5_percent`%) with an RPD above 5.0%. The high RPD in the two samples with the highest RPD (`r pH_rpd_max`% and `r pH_rpd_above_8_5`%) was likely due to differences in the pH meter calibrations. The Fisher Accumet pH meter was calibrated with pH 4, 7, and 10, whereas the Orion Star pH meter was calibrated with pH 4, 6, 7, and 8 and these two samples had a pH above 8. The average RPD of samples with pH above 8 was `r pH_above_8_rpd_mean`% ± `r pH_above_8_rpd_sd`%, with a maximum RPD of `r pH_above_8_rpd_max`%, whereas the average RPD of samples with pH below 8 was `r pH_below_8_rpd_mean`% ± `r pH_below_8_rpd_sd`%, with a maximum RPD of `r pH_below_8_rpd_max`%.
+
+\restylefloat*{figure}
+\begin{figure}[h]
+  \begin{minipage}[t]{0.48\textwidth}
+    \centering
+    \includegraphics[width=0.98\textwidth]{fisher_v_orion_above_8.pdf}
+    \caption{Comparison of pH results of samples measured on the Fisher Accumet pH meter and the Orion Star pH meter in samples with pH above 8, $\mbox{\textit{y}=`r pH_above_8_fit_slope`}$$\textit{x}$$+$$\mbox{`r pH_above_8_fit_intercept`}$, $\mbox{\textit{n}=`r pH_above_8_fit_n`}$, $\textit{R}$$^2$$\mbox{=`r pH_above_8_fit_rsquared`}$, $\mbox{\textit{p} `r pH_above_8_fit_pval`}$.}
+  \end{minipage}
+  \hfill
+  \begin{minipage}[t]{0.48\textwidth}
+    \centering
+    \includegraphics[width=0.98\textwidth]{fisher_v_orion_below_8.pdf}
+    \caption{Comparison of pH results of samples measured on the Fisher Accumet pH meter and the Orion Star pH meter in samples with pH below 8, $\mbox{\textit{y}=`r pH_below_8_fit_slope`}$$\textit{x}$$+$$\mbox{`r pH_below_8_fit_intercept`}$, $\mbox{\textit{n}=`r pH_below_8_fit_n`}$, $\textit{R}$$^2$$\mbox{=`r pH_below_8_fit_rsquared`}$, $\mbox{\textit{p} `r pH_below_8_fit_pval`}$.}
+  \end{minipage}
+\end{figure}
+
+\subsection{Conclusions}
+
+The Orion Star pH meter had similar analytical and replication precision as the Fisher Accumet pH meter. The Orion Star electrode is stable over the course of a field season, as witnessed by the stability of the mV response. The reference sample pH, measured by both pH meters, decreased over the course of the field season, which was likely due to CO~2~ dissolution into the sample. To mitigate this, protocols to ensure that the reference sample is equilibrated with the atmosphere prior to use will be enacted, which include storing the sample with a large head space and shaking the sample. While there was a bias in the reference sample pH, wherein the Fisher Accumet pH meter generated higher pH on average, this assessment was over a small pH range (i.e. `r orion_ref_min` to `r orion_ref_max`) and the RPDs were $\leq$ `r ref_rpd_max`%. The Orion Star pH meter performed within acceptable limits for the measurement of proficiency testing samples (RPD $\leq$ `r orion_pt_rpd_max`). There was a bias in samples with a pH above 8, wherein the Orion Star pH meter resulted in higher pH than the Fisher Accumet pH meter, some of which was due to differences in the pH meter calibration curve ranges. In previous years, the Fisher Accumet pH meter was always calibrated with pH buffers 4, 6, and 8. Going forward, the Orion Star pH meter will calibrated with pH buffers 4, 6, 8, and 10 rather than 4, 6, 7, and 8, to improve the accuracy and precision of samples with pH above 8. Despite this bias in samples with pH above 8, the pH of samples measured on the Orion Star pH meter were significantly correlated (*R^2^* = `r pH_fit_rsquared`, *p* `r pH_fit_pval`) and `r pH_rpd_below_5_percent`% of samples had a RPD $\leq$ 5.0%. 
+
